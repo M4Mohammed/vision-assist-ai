@@ -1,0 +1,102 @@
+"""Qwen2-VL captioner: loads the model once and generates captions with token/latency metadata."""
+
+import time
+from typing import Any, Dict, Optional
+
+from PIL import Image
+
+from app.config import settings
+
+
+class Captioner:
+    """
+    Wraps the Qwen2-VL vision-language model (a navigation-assistant fine-tune).
+
+    The model is loaded lazily via load() (called once at app startup) because it is several GB.
+    generate() runs the chat-style image+instruction prompt and returns the reply plus token counts
+    and latency.
+    """
+
+    def __init__(self, model_name: Optional[str] = None, max_new_tokens: Optional[int] = None) -> None:
+        self.model_name = model_name or settings.MODEL_NAME
+        self.max_new_tokens = max_new_tokens or settings.MAX_NEW_TOKENS
+        self.default_prompt = settings.CAPTION_PROMPT
+        self.device = "cpu"
+        self.processor = None
+        self.model = None
+
+    @property
+    def is_loaded(self) -> bool:
+        return self.model is not None and self.processor is not None
+
+    def load(self) -> None:
+        """Loads the processor and model weights. Downloads several GB on first run."""
+        import torch
+        from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # fp16 on GPU (T4 has no bf16); fp32 on CPU. On Ampere+ GPUs bf16 is preferable.
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
+
+        print(f"Loading {self.model_name} on {self.device} ({dtype})...")
+        self.processor = AutoProcessor.from_pretrained(self.model_name)
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            self.model_name, torch_dtype=dtype
+        ).to(self.device)
+        self.model.eval()
+        print("Model loaded.")
+
+    def generate(self, image: Image.Image, prompt: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generates a caption for the image.
+
+        Returns a dict with: caption, input_tokens, output_tokens, total_tokens, latency_ms.
+        input_tokens includes the expanded image (vision) tokens, so it scales with image size.
+        """
+        if not self.is_loaded:
+            raise RuntimeError("Model is not loaded.")
+
+        import torch
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        instruction = prompt or self.default_prompt
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": instruction},
+                ],
+            }
+        ]
+        # Build the chat-formatted text (with the image placeholder), then bind the actual image.
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(
+            text=[text], images=[image], padding=True, return_tensors="pt"
+        ).to(self.device)
+
+        input_len = int(inputs.input_ids.shape[-1])
+
+        start = time.perf_counter()
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        # Drop the prompt tokens; decode only what the model generated.
+        trimmed = generated_ids[:, input_len:]
+        caption = self.processor.batch_decode(
+            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )[0].strip()
+        output_tokens = int(trimmed.shape[-1])
+
+        return {
+            "caption": caption,
+            "input_tokens": input_len,
+            "output_tokens": output_tokens,
+            "total_tokens": input_len + output_tokens,
+            "latency_ms": round(latency_ms, 2),
+        }

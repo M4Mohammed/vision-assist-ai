@@ -1,5 +1,12 @@
 .env
 /__pycache__
-/venv
 */__pycache__
+/venv
+/.venv
 /.pytest_cache
+
+# Hugging Face / model weight caches
+/.cache
+hf_home/
+*.bin
+*.safetensors

@@ -1,46 +1,33 @@
-# Use an official Python runtime as a parent image, optimized for PyTorch
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+# Vision Assist captioning service.
+# Runs on a Hugging Face Docker Space OR a GPU server (port 7860). For GPU, run the container with
+# the NVIDIA runtime (`--gpus all`) and a recent host driver.
+FROM python:3.11
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+WORKDIR /code
 
-# Set the working directory in the container
-WORKDIR /app
+# Model weights cache (mount a volume here to persist across restarts).
+ENV HF_HOME=/code/hf_home
+ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies needed for OpenCV, PIL, etc.
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Install a CUDA 12.8 build of PyTorch + torchvision first. cu128 is required for Blackwell GPUs
+# (e.g. RTX PRO 6000); it also runs on older NVIDIA cards and falls back to CPU when no GPU is
+# present. Doing this before requirements means torch/torchvision are already satisfied and won't be
+# replaced by default wheels. torchvision is needed by Qwen2-VL's AutoProcessor.
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
-# Copy the requirements file into the container
-COPY requirements.txt /app/
+# Remaining Python dependencies.
+COPY requirements.txt /code/requirements.txt
+RUN pip install --no-cache-dir -r /code/requirements.txt
 
-# Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+# Application package.
+COPY app /code/app
 
-# Create directories required by the application
-RUN mkdir -p /app/src/backend /app/src/frontend
+# Optional: pre-download the model at build time to cut cold-start latency.
+# Pulls several GB into the image, so it is disabled by default (we use a persistent HF_HOME volume).
+# RUN python -c "from transformers import AutoProcessor, Qwen2VLForConditionalGeneration; \
+#     AutoProcessor.from_pretrained('MarinaMohsen/qwen2-vl-2b-nav-assistant'); \
+#     Qwen2VLForConditionalGeneration.from_pretrained('MarinaMohsen/qwen2-vl-2b-nav-assistant')"
 
-# Copy the application code into the container
-COPY ./src/backend /app/src/backend
-COPY ./src/frontend /app/src/frontend
-
-# Expose the API port
-EXPOSE 8000
-
-# Optional: Pre-download the Hugging Face model so the container starts faster
-# This requires running a tiny script during build
-RUN python -c "from transformers import BlipProcessor, BlipForConditionalGeneration; \
-    BlipProcessor.from_pretrained('Salesforce/blip-image-captioning-base'); \
-    BlipForConditionalGeneration.from_pretrained('Salesforce/blip-image-captioning-base')"
-
-# Set the current working directory to backend so Uvicorn runs correctly
-WORKDIR /app/src/backend
-
-# Command to run the FastAPI application using Uvicorn
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 7860
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

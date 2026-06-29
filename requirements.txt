@@ -1,8 +1,10 @@
 fastapi
-uvicorn
+uvicorn[standard]
+pydantic
 Pillow
-python-multipart
-websockets
-requests
-opencv-python-headless
-huggingface_hub
+torch
+# torchvision is required by Qwen2-VL's AutoProcessor (it loads Qwen2VLVideoProcessor even for
+# image-only use); without it the model load throws ImportError at startup.
+torchvision
+transformers>=4.49.0
+accelerate
