@@ -32,8 +32,9 @@ Request:
 ```
 
 - `image_base64` — base64-encoded frame. A `data:image/...;base64,` prefix is accepted and stripped.
-- `prompt` — optional instruction. When omitted, the configured `CAPTION_PROMPT` (a navigation prompt)
-  is used. Qwen2-VL is an instruct model, so the prompt shapes the output.
+- `prompt` — optional instruction, sent to the model as a **system** message (the user turn carries
+  only the image). When omitted, the configured `CAPTION_PROMPT` (a navigation system prompt) is used.
+  Qwen2-VL is an instruct model, so both the role and the wording shape the output.
 
 Response `200`:
 
@@ -73,8 +74,8 @@ Environment variables (see `.env.example`):
 | Variable          | Default            | Description                                             |
 | ----------------- | ------------------ | ------------------------------------------------------- |
 | `MODEL_NAME`      | `MarinaMohsen/qwen2-vl-2b-nav-assistant` | Hugging Face model id.            |
-| `MAX_NEW_TOKENS`  | `64`               | Max generated tokens per caption (lower = faster).      |
-| `CAPTION_PROMPT`  | a navigation prompt | Instruction sent with every frame; tune to the fine-tune. |
+| `MAX_NEW_TOKENS`  | `40`               | Max generated tokens per caption — a ceiling, not a target (lower = faster). |
+| `CAPTION_PROMPT`  | nav system prompt  | Instruction sent with every frame as a **system** message; default mirrors the model author's Space. |
 | `ALLOWED_ORIGINS` | `*`                | Comma-separated CORS origins (set to the backend origin in prod). |
 | `PORT`            | `7860`             | Listen port (Hugging Face Spaces require 7860).         |
 

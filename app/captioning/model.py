@@ -62,14 +62,17 @@ class Captioner:
             image = image.convert("RGB")
 
         instruction = prompt or self.default_prompt
+        # Mirror the model author's reference usage: the instruction is a SYSTEM message and the user
+        # turn carries only the image. The checkpoint was developed/validated this way; putting the
+        # instruction in the user turn (as we did before) diverges from that and gives weaker output.
         messages = [
+            {"role": "system", "content": instruction},
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": instruction},
                 ],
-            }
+            },
         ]
         # Build the chat-formatted text (with the image placeholder), then bind the actual image.
         text = self.processor.apply_chat_template(
@@ -83,7 +86,11 @@ class Captioner:
 
         start = time.perf_counter()
         with torch.no_grad():
-            generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,  # deterministic greedy decode, matching the author's reference usage
+            )
         latency_ms = (time.perf_counter() - start) * 1000
 
         # Drop the prompt tokens; decode only what the model generated.
